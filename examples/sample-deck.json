@@ -1,0 +1,220 @@
+{
+  "title": "Retry failed payouts",
+  "summary": "Payouts that time out at the provider are now retried on a queue instead of being marked failed straight away. Adds a retry worker, a new `payout_attempts` table, and a back-off. The provider client is unchanged except for the idempotency key.",
+  "target": {
+    "target": "uncommitted"
+  },
+  "slides": [
+    {
+      "title": "How the retry path fits together",
+      "kind": "overview",
+      "summary": "A timed-out charge no longer fails the payout. The worker writes an attempt row, pushes the payout back on the retry queue, and waits before trying again. The API route is untouched.",
+      "why": "Everything else on this deck hangs off this one flow.",
+      "files": [],
+      "annotations": [],
+      "suggestions": [],
+      "diagram": {
+        "kind": "flow",
+        "title": "Payout retry path",
+        "direction": "down",
+        "nodes": [
+          {
+            "id": "api",
+            "label": "POST /payouts",
+            "note": "routes/payouts.ts"
+          },
+          {
+            "id": "queue",
+            "label": "Retry queue",
+            "note": "new",
+            "tone": "added"
+          },
+          {
+            "id": "worker",
+            "label": "Payout worker",
+            "note": "worker/payout.ts",
+            "tone": "changed"
+          },
+          {
+            "id": "attempts",
+            "label": "payout_attempts",
+            "note": "new table",
+            "tone": "added"
+          },
+          {
+            "id": "psp",
+            "label": "Provider API",
+            "tone": "external"
+          }
+        ],
+        "edges": [
+          {
+            "from": "api",
+            "to": "queue",
+            "label": "enqueue"
+          },
+          {
+            "from": "queue",
+            "to": "worker"
+          },
+          {
+            "from": "worker",
+            "to": "psp",
+            "label": "charge"
+          },
+          {
+            "from": "worker",
+            "to": "attempts",
+            "label": "record"
+          },
+          {
+            "from": "worker",
+            "to": "queue",
+            "label": "retry",
+            "style": "dashed"
+          }
+        ]
+      }
+    },
+    {
+      "title": "The retry worker",
+      "kind": "change",
+      "summary": "`chargeWithRetry` wraps the provider call. On a timeout it records the attempt and re-queues with a back-off. On any other error it fails the payout as before.",
+      "files": [
+        {
+          "path": "src/worker/payout.ts",
+          "role": "the new retry loop",
+          "patch": "@@ -12,9 +12,24 @@ import { provider } from \"../provider\";\n export async function chargePayout(payout: Payout) {\n-  const result = await provider.charge(payout.amount);\n-  if (!result.ok) {\n-    await markFailed(payout.id, result.error);\n-    return;\n+  const key = randomUUID();\n+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {\n+    const result = await provider.charge(payout.amount, key);\n+    if (result.ok) {\n+      await markPaid(payout.id);\n+      return;\n+    }\n+    if (result.error !== \"timeout\") {\n+      await markFailed(payout.id, result.error);\n+      return;\n+    }\n+    await recordAttempt(payout.id, attempt);\n+    await sleep(30_000);\n   }\n-  await markPaid(payout.id);\n+  await markFailed(payout.id, \"exhausted retries\");\n }\n"
+        }
+      ],
+      "annotations": [
+        {
+          "path": "src/worker/payout.ts",
+          "line": 13,
+          "side": "new",
+          "severity": "blocker",
+          "title": "A new idempotency key is made on every worker run",
+          "body": "`randomUUID()` runs inside `chargePayout`, so each run of the worker builds a fresh key. If the worker crashes after the provider accepted the charge but before `markPaid`, the next run sends a different key and the provider treats it as a new charge.\n\n**Impact:** the customer is charged twice. Money moves, so this is not recoverable in code.\n\n**Scope:** belongs in this change — the retry loop is what makes the second call possible.",
+          "suggestion": "const key = payout.idempotencyKey ?? (await claimIdempotencyKey(payout.id));"
+        },
+        {
+          "path": "src/worker/payout.ts",
+          "line": 25,
+          "side": "new",
+          "severity": "issue",
+          "title": "The 30 second wait blocks the worker",
+          "body": "`sleep(30_000)` holds the worker process for the whole wait. With `MAX_ATTEMPTS` at 3 one stuck payout can hold a worker slot for 90 seconds.\n\n**Impact:** throughput drops while one payout retries. Nothing breaks, but the queue backs up under load.\n\n**Scope:** belongs in this change. Re-queue with a delay instead of sleeping."
+        },
+        {
+          "path": "src/worker/payout.ts",
+          "line": 20,
+          "side": "new",
+          "severity": "praise",
+          "title": "Only timeouts retry",
+          "body": "Checking `result.error !== \"timeout\"` before retrying is the right call. A declined card retried three times would just annoy the customer."
+        }
+      ],
+      "suggestions": [
+        {
+          "severity": "question",
+          "title": "Where does MAX_ATTEMPTS come from?",
+          "body": "It is not in this diff. Is it a constant in this file already, or config? If it is config, a bad value turns this into an infinite loop."
+        }
+      ],
+      "diagram": {
+        "kind": "sequence",
+        "title": "What happens on a timeout",
+        "actors": [
+          {
+            "id": "worker",
+            "label": "Worker",
+            "tone": "changed"
+          },
+          {
+            "id": "psp",
+            "label": "Provider",
+            "tone": "external"
+          },
+          {
+            "id": "db",
+            "label": "payouts"
+          }
+        ],
+        "steps": [
+          {
+            "from": "worker",
+            "to": "psp",
+            "label": "charge(amount, key)"
+          },
+          {
+            "from": "psp",
+            "to": "worker",
+            "label": "timeout",
+            "style": "return"
+          },
+          {
+            "from": "worker",
+            "to": "db",
+            "label": "recordAttempt",
+            "changed": true
+          },
+          {
+            "from": "worker",
+            "to": "worker",
+            "label": "sleep 30s",
+            "changed": true
+          },
+          {
+            "from": "worker",
+            "to": "psp",
+            "label": "charge(amount, NEW key)",
+            "changed": true
+          }
+        ]
+      }
+    },
+    {
+      "title": "The payout_attempts table",
+      "kind": "risk",
+      "summary": "A new table records every attempt. There is no index on `payout_id`, and the migration does not backfill.",
+      "files": [
+        {
+          "path": "migrations/0042_payout_attempts.sql",
+          "role": "the new table",
+          "patch": "@@ -0,0 +1,7 @@\n+CREATE TABLE payout_attempts (\n+  id BIGSERIAL PRIMARY KEY,\n+  payout_id UUID NOT NULL,\n+  attempt INT NOT NULL,\n+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n+);\n"
+        }
+      ],
+      "annotations": [
+        {
+          "path": "migrations/0042_payout_attempts.sql",
+          "line": 3,
+          "side": "new",
+          "severity": "issue",
+          "title": "No index on payout_id",
+          "body": "Every read of this table filters by `payout_id`, but only `id` is indexed. Postgres will scan the whole table.\n\n**Impact:** fine today with an empty table; slow once retries have run for a few weeks.\n\n**Scope:** belongs in this change — adding the index later needs a second migration on a table that is already large.",
+          "suggestion": "CREATE INDEX payout_attempts_payout_id_idx ON payout_attempts (payout_id);"
+        }
+      ],
+      "suggestions": []
+    },
+    {
+      "title": "What I would fix before merging",
+      "kind": "wrapup",
+      "summary": "One blocker and two issues. The idempotency key is the one that must change; the rest can follow.",
+      "files": [],
+      "annotations": [],
+      "suggestions": [
+        {
+          "severity": "blocker",
+          "title": "Reuse one idempotency key per payout",
+          "body": "See slide 2. This is the only finding that can move money twice."
+        },
+        {
+          "severity": "info",
+          "title": "No tests cover the retry loop",
+          "body": "Nothing in this change exercises the timeout path. A test that makes the provider time out once and then succeed would catch the key bug."
+        }
+      ]
+    }
+  ]
+}
