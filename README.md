@@ -329,3 +329,7 @@ Layout:
 | `tests/chat-intent.mts` | The chat opens as a question, not as a verdict. |
 | `tests/runner-panel.mts` | A reviewer thread shows its review, deck or not. |
 | `tests/deck-edit.mts` | A deck edits in place without losing your answers. |
+
+## License
+
+MIT — see [LICENSE](LICENSE).

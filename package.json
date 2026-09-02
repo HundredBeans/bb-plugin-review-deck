@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Guided, slide-by-slide code review decks that agents write and humans click through.",
   "type": "module",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HundredBeans/bb-plugin-review-deck.git"
