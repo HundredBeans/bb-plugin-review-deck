@@ -377,6 +377,10 @@ Layout:
 | `tests/publish-in-place.mts` | An existing review becomes a deck without being redone. |
 | `tests/chat-target.mts` | Talking lands in the deck's existing conversation. |
 
+## Changelog
+
+[CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
