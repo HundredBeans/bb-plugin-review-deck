@@ -4,13 +4,20 @@ import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/tes
 import plugin from "../server.ts";
 
 const spawns: { prompt: string; title: string }[] = [];
+// Which threads are archived, so a chat has nowhere existing to land.
+const archived = new Set<string>();
 const sends: string[] = [];
 const { bb, harness } = createFakePluginHost({
   pluginId: "review-deck",
   sdk: {
     projects: { list: async () => [{ id: "proj_1", name: "demo", gitRemoteUrl: null, sources: [] }] },
     threads: {
-      get: async () => makeThreadResponse({ id: "thr_author", environmentId: "env_1" }),
+      get: async ({ threadId }: { threadId: string }) =>
+        makeThreadResponse({
+          id: threadId,
+          environmentId: "env_1",
+          ...(archived.has(threadId) ? { archivedAt: 1 } : {}),
+        }),
       spawn: async (args: { prompt: string; title: string }) => {
         spawns.push({ prompt: args.prompt, title: args.title });
         return makeThreadResponse({ id: `thr_chat${spawns.length}` });
@@ -40,6 +47,11 @@ for (const title of ["The metric", "The eval", "Tests"]) {
 await harness.behavior.callAgentTool("review_deck_finish", { deckId: deck.deckId }, ctx);
 
 // --- pressing Chat while still reading ----------------------------------
+// The authoring thread is gone, so this is the case where a chat has to be
+// opened — which is what this test is about. When that thread is still alive
+// the chat lands there instead; tests/chat-target.mts covers that.
+archived.add("thr_author");
+
 const ask = await harness.behavior.callRpc("deck_act", { deckId: deck.deckId, intent: "ask" });
 assert.equal(ask.ok, true, ask.message);
 assert.equal(spawns.length, 1, "one chat thread");

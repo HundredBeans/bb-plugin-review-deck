@@ -58,9 +58,16 @@ you are still reading: answer questions, do not summarise, do not suggest next
 steps, do not touch any files. It works in the right workspace, so it can read
 the code to answer you.
 
-The conversation belongs to the deck, so closing and reopening comes back to it
-rather than starting again. When you do finish, **Send my notes to the chat**
-at the end of the deck hands over what you decided, in the same conversation.
+**Talking lands where the conversation already is.** A new thread is the last
+resort, not the first move. In order, a chat about a deck goes to: the deck's
+own chat if it has one, the thread an agent wrote it in, the thread it
+reviewed, or a thread you attached it to. Only when none of those is still
+around does it open a new one — and the button says so before you press it,
+naming the thread it will post to.
+
+Whichever thread it lands in becomes the deck's chat, so the Chat panel and the
+next press agree. When you finish, **Send my notes to "…"** at the end of the
+deck hands over what you decided, in that same conversation.
 
 **You can ask it to change the deck.** "Drop that finding", "that is a nit not
 a blocker", "the line number is wrong", "add a slide about the migration" — the
@@ -81,10 +88,9 @@ something happens next. Everything there works from the findings you marked
 
 | Action | What it does |
 | --- | --- |
-| **Talk it through with an agent** | Hands your notes to the deck's chat. The agent says what it thinks the real work is, offers next steps, and waits. If a chat is already open the button reads **Send my notes to the chat** and continues it. |
+| **Send my notes to "…"** | Hands your notes to the thread this deck already belongs to, named on the button. The agent says what it thinks the real work is, offers next steps, and waits. Reads **Talk it through in a new thread** only when the deck has no conversation left. |
 | **Fix the N agreed findings** | Opens a thread that works through them in order, in the right workspace. For a merge request that is a fresh worktree with the branch already fetched. |
 | **Post to !N as inline comments** | Writes each agreed finding onto the merge request, anchored to its own line. Asks for confirmation first. |
-| **Reply in the original thread** | For a deck an agent wrote in one of your conversations, or a thread review — sends your notes back to the thread that already has the context. |
 | **Copy notes** | The whole thing as markdown. |
 
 Only findings you agreed with are ever sent anywhere. Ones you rejected, and
@@ -369,6 +375,7 @@ Layout:
 | `tests/deck-edit.mts` | A deck edits in place without losing your answers. |
 | `tests/attach.mts` | A deck links to a thread that did not create it. |
 | `tests/publish-in-place.mts` | An existing review becomes a deck without being redone. |
+| `tests/chat-target.mts` | Talking lands in the deck's existing conversation. |
 
 ## License
 

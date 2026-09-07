@@ -625,6 +625,9 @@ function NextSteps({ deckId, onCopy }: { deckId: string; onCopy: () => void }) {
     mrLabel: string | null;
     replyThreadId: string | null;
     discussionThreadId: string | null;
+    chatThreadId: string | null;
+    chatThreadTitle: string | null;
+    chatWouldSpawn: boolean;
   } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmPost, setConfirmPost] = useState(false);
@@ -696,9 +699,11 @@ function NextSteps({ deckId, onCopy }: { deckId: string; onCopy: () => void }) {
           <Icon name="MessageSquare" className="size-4" />
           {busy === "discuss"
             ? "Sending…"
-            : info?.discussionThreadId == null
-              ? "Talk it through with an agent"
-              : "Send my notes to the chat"}
+            : info?.chatWouldSpawn !== false
+              ? "Talk it through in a new thread"
+              : info.chatThreadTitle === null
+                ? "Send my notes to the chat"
+                : `Send my notes to “${info.chatThreadTitle}”`}
         </Button>
 
         <Button
@@ -752,35 +757,6 @@ function NextSteps({ deckId, onCopy }: { deckId: string; onCopy: () => void }) {
           )
         ) : null}
 
-        {info?.replyThreadId == null ? null : (
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8"
-            disabled={busy !== null}
-            onClick={() => {
-              setBusy("reply");
-              rpc
-                .call("deck_send_notes", { deckId })
-                .then(
-                  (result) => {
-                    if (!result.sent) {
-                      toast.error(result.message);
-                      return;
-                    }
-                    toast.success(result.message);
-                    if (result.threadId !== null) navigate.toThread(result.threadId);
-                  },
-                  (cause: unknown) => toast.error(String(cause)),
-                )
-                .finally(() => setBusy(null));
-            }}
-          >
-            <Icon name="Bot" className="size-4" />
-            {busy === "reply" ? "Sending…" : "Reply in the original thread"}
-          </Button>
-        )}
-
         <Button
           variant="ghost"
           size="sm"
@@ -791,6 +767,12 @@ function NextSteps({ deckId, onCopy }: { deckId: string; onCopy: () => void }) {
           Copy notes
         </Button>
       </div>
+
+      {info?.chatWouldSpawn === true ? (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          This deck has no conversation yet, so talking opens a new thread.
+        </p>
+      ) : null}
 
       {confirmPost ? (
         <p className="mt-2 text-[12px] text-destructive">

@@ -273,6 +273,11 @@ export const rpcContract = defineRpcContract({
       replyThreadId: z.string().nullable(),
       /** The conversation attached to this deck, if one has been started. */
       discussionThreadId: z.string().nullable(),
+      /** Where a chat would land, and what it is called. */
+      chatThreadId: z.string().nullable(),
+      chatThreadTitle: z.string().nullable(),
+      /** True when talking would have to open a new thread. */
+      chatWouldSpawn: z.boolean(),
     }),
   },
   deck_act: {
@@ -2124,18 +2129,51 @@ export default async function plugin(bb: BbPluginApi) {
         }
       | undefined;
     if (row === undefined) return null;
-    const candidate =
-      row.source_thread_id ?? (row.watch_id === null ? row.thread_id : null);
-    if (candidate === null) return null;
-    try {
-      const thread = await bb.sdk.threads.get({ threadId: candidate });
-      if (thread.archivedAt !== null && thread.archivedAt !== undefined) {
-        return null;
-      }
-      return candidate;
-    } catch {
-      return null;
+    const candidates = [
+      row.source_thread_id,
+      row.watch_id === null ? row.thread_id : null,
+      // A thread you attached the deck to, or one opened to fix its findings.
+      attachedDeckThreadFor(deckId),
+    ].filter((id): id is string => id !== null);
+    for (const candidate of candidates) {
+      if (await threadIsUsable(candidate)) return candidate;
     }
+    return null;
+  }
+
+  /** A thread linked to this deck through deck_threads, newest first. */
+  function attachedDeckThreadFor(deckId: string): string | null {
+    const row = db
+      .prepare(
+        `SELECT thread_id FROM deck_threads WHERE deck_id = ?
+         ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(deckId) as { thread_id: string } | undefined;
+    return row?.thread_id ?? null;
+  }
+
+  /** A thread we can still talk in: it exists and is not archived. */
+  async function threadIsUsable(threadId: string): Promise<boolean> {
+    try {
+      const thread = await bb.sdk.threads.get({ threadId });
+      return thread.archivedAt === null || thread.archivedAt === undefined;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Where a chat about this deck belongs.
+   *
+   * A new thread is the last resort, not the first move. If the deck already
+   * has a conversation — its own chat, the thread it was written in, the
+   * thread it reviewed, one you attached it to — that conversation has the
+   * context, and spawning a fresh agent throws it away.
+   */
+  async function chatTargetForDeck(deckId: string): Promise<string | null> {
+    const chat = await discussionThreadForDeck(deckId);
+    if (chat !== null) return chat;
+    return replyTargetForDeck(deckId);
   }
 
   function sourceThreadForDeck(deckId: string): string | null {
@@ -2421,8 +2459,14 @@ export default async function plugin(bb: BbPluginApi) {
     // while still reading must not be treated as finishing: only "discuss"
     // hands over the notes, and only when you press it.
     if (intent !== "fix") {
-      const existing = await discussionThreadForDeck(deckId);
+      const existing = await chatTargetForDeck(deckId);
       if (existing !== null) {
+        // Whichever thread it is, it is this deck's conversation from now on,
+        // so the Chat panel and the next press both land in the same place.
+        db.prepare(
+          `UPDATE decks SET discussion_thread_id = ?, updated_at = ? WHERE id = ?`,
+        ).run(existing, now(), deckId);
+        changed();
         if (intent === "discuss") {
           try {
             await bb.sdk.threads.send({
@@ -2741,9 +2785,22 @@ export default async function plugin(bb: BbPluginApi) {
       if (deck === null) throw new Error(`No deck with id ${deckId}`);
       const watch = watchForDeck(deckId);
       const all = deck.slides.flatMap((slide) => slide.annotations);
+      const chatThreadId = await chatTargetForDeck(deckId);
+      let chatThreadTitle: string | null = null;
+      if (chatThreadId !== null) {
+        try {
+          const thread = await bb.sdk.threads.get({ threadId: chatThreadId });
+          chatThreadTitle = thread.title ?? thread.titleFallback ?? null;
+        } catch {
+          chatThreadTitle = null;
+        }
+      }
       return {
         replyThreadId: await replyTargetForDeck(deckId),
         discussionThreadId: await discussionThreadForDeck(deckId),
+        chatThreadId,
+        chatThreadTitle,
+        chatWouldSpawn: chatThreadId === null,
         agreedCount: agreedFindings(deck).length,
         openCount: all.filter(
           (item) => (deck.verdicts[item.id]?.verdict ?? "open") === "open",
