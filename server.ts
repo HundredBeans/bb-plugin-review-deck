@@ -318,6 +318,15 @@ export const rpcContract = defineRpcContract({
       ),
     }),
   },
+  thread_publish_review: {
+    input: z
+      .object({
+        threadId: z.string().min(1),
+        note: z.string().max(4000).optional(),
+      })
+      .strict(),
+    output: z.object({ ok: z.boolean(), message: z.string() }),
+  },
   deck_attach: {
     input: z
       .object({ deckId: z.string().min(1), threadId: z.string().min(1) })
@@ -2805,6 +2814,55 @@ export default async function plugin(bb: BbPluginApi) {
       };
     },
     deck_post_to_mr: ({ deckId }) => postDeckToMr(deckId),
+    /**
+     * Asks the thread that already did a review to publish it as a deck.
+     *
+     * No second agent and no re-reading: this agent has the review in its
+     * context, so it only needs to call the tools. Spawning a reviewer here
+     * would redo minutes of work for an answer that already exists.
+     */
+    thread_publish_review: async ({ threadId, note }) => {
+      const existing = deckForContext(threadId);
+      if (existing !== null) {
+        return {
+          ok: false,
+          message: "This thread already has a deck. Detach it first if you want another.",
+        };
+      }
+      const lines = [
+        "Publish the review you have already done in this thread as a review deck.",
+        "",
+        "Use what you already found. Do not review anything again and do not",
+        "re-read the whole diff — you have the findings, this is only about",
+        "putting them into slides.",
+        "",
+        "Follow the review-deck skill: review_deck_create, then",
+        "review_deck_add_slide once per group of related changes, then",
+        "review_deck_finish. Pin each finding to the file and line you already",
+        "identified. If you are unsure of a line number, check that one file",
+        "rather than starting over.",
+        "",
+        "If you have not actually reviewed anything in this thread yet, say so",
+        "instead of inventing a deck.",
+      ];
+      if ((note ?? "").trim() !== "") {
+        lines.push("", "---", "", (note as string).trim());
+      }
+      try {
+        await bb.sdk.threads.send({
+          threadId,
+          mode: "auto",
+          input: [{ type: "text", text: lines.join("\n"), mentions: [] }],
+        });
+      } catch (cause) {
+        return {
+          ok: false,
+          message: cause instanceof Error ? cause.message : String(cause),
+        };
+      }
+      return { ok: true, message: "Asked this thread to publish its review." };
+    },
+
     deck_attach: ({ deckId, threadId }) => {
       if (readDeckRow(deckId) === null) {
         throw new Error(`No deck with id ${deckId}`);

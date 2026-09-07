@@ -173,6 +173,25 @@ The reviewer shares the thread's workspace rather than getting its own, so it
 is only stopped when it finishes — never archived, because archiving the last
 thread of a managed worktree destroys the worktree.
 
+## Already reviewed it in a thread?
+
+If an agent has just reviewed something in a conversation and you only then
+want a deck, do not run the review again. Open that thread's **Review deck**
+panel and press **Publish the review already in this thread**.
+
+That asks the agent in that conversation to put what it already found into
+slides. No second agent, no re-reading the diff, and the wording stays the one
+you have already read. The skill tells it explicitly to skip
+`review_deck_changed_files` and only reopen a file if it is unsure of a single
+line number.
+
+The alternative, **Review these changes**, is the slow path: a fresh agent
+reads the workspace from scratch. Use it when nobody has reviewed yet, or when
+you deliberately want a second opinion.
+
+From a shell there is no equivalent — this one needs the conversation's own
+context, so it goes through the thread rather than a new run.
+
 ## Attaching a deck to a thread
 
 A deck normally belongs to the thread that made it — the reviewer, the thread
@@ -349,6 +368,7 @@ Layout:
 | `tests/runner-panel.mts` | A reviewer thread shows its review, deck or not. |
 | `tests/deck-edit.mts` | A deck edits in place without losing your answers. |
 | `tests/attach.mts` | A deck links to a thread that did not create it. |
+| `tests/publish-in-place.mts` | An existing review becomes a deck without being redone. |
 
 ## License
 

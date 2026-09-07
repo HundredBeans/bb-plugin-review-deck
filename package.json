@@ -30,7 +30,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "tsx tests/schema.mts && tsx tests/gitlab-position.mts && tsx tests/slash-menu.mts && tsx tests/chat-intent.mts && tsx tests/runner-panel.mts && tsx tests/deck-edit.mts && tsx tests/attach.mts && tsx tests/re-review.mts && tsx tests/snapshot.mts && tsx tests/interrupted.mts && tsx tests/stopped.mts && tsx tests/no-retry-loop.mts",
+    "test": "tsx tests/schema.mts && tsx tests/gitlab-position.mts && tsx tests/slash-menu.mts && tsx tests/chat-intent.mts && tsx tests/runner-panel.mts && tsx tests/deck-edit.mts && tsx tests/attach.mts && tsx tests/publish-in-place.mts && tsx tests/re-review.mts && tsx tests/snapshot.mts && tsx tests/interrupted.mts && tsx tests/stopped.mts && tsx tests/no-retry-loop.mts",
     "build": "bb plugin build"
   },
   "dependencies": {

@@ -47,6 +47,24 @@ found in chat instead.
 5. **Finish**: `review_deck_finish` with the `deckId`. It returns the link and a
    sentence to tell the user. Tell them the deck is ready and where it is.
 
+## Publishing a review you have already done
+
+If you have just reviewed something in this conversation and are then asked for
+a deck, **do not review it again**. You already have the findings; this is only
+about putting them into slides.
+
+- Skip `review_deck_changed_files` — you know what changed.
+- Do not re-read the diff. Go straight to `review_deck_create`, then one
+  `review_deck_add_slide` per group, then `review_deck_finish`.
+- Reuse the wording you already gave the user. They have read it once; changing
+  it makes them re-read everything.
+- Only open a file again if you are unsure of a line number for one finding.
+  Check that file, not the whole change.
+
+Re-reviewing here costs minutes and produces a second opinion nobody asked
+for. If you genuinely have not reviewed anything yet, say so rather than
+inventing a deck from the conversation.
+
 ## Writing a slide
 
 - `summary` — two or three sentences of plain language. What this group of

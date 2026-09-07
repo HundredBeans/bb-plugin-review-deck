@@ -1493,7 +1493,7 @@ function ThreadDeckPanel({ threadId }: { threadId: string }) {
     <div className="rounded-lg border border-border bg-card px-3 py-3">
       <p className="text-[13px] text-foreground">
         {status.deckId === null
-          ? "Turn this thread's changes into a review deck."
+          ? "Already reviewed this here? Publish what you found. Otherwise a second agent can review it fresh."
           : "Review the current changes again and rewrite the deck."}
       </p>
       <p className="mt-1 text-[11px] text-muted-foreground">
@@ -1501,6 +1501,30 @@ function ThreadDeckPanel({ threadId }: { threadId: string }) {
         not committed yet. It reads only — it will not edit your files.
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {status.deckId !== null ? null : (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="h-7 text-xs"
+            disabled={busy || status.running}
+            onClick={() => {
+              setBusy(true);
+              rpc
+                .call("thread_publish_review", { threadId })
+                .then(
+                  (result) =>
+                    result.ok
+                      ? toast.success(result.message)
+                      : toast.error(result.message),
+                  (cause: unknown) => toast.error(String(cause)),
+                )
+                .finally(() => setBusy(false));
+            }}
+          >
+            <Icon name="Zap" className="size-3.5" />
+            Publish the review already in this thread
+          </Button>
+        )}
         <Button
           size="sm"
           className="h-7 text-xs"
