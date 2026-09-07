@@ -42,5 +42,21 @@ assert.ok(
   "and the other one too",
 );
 
+// A deck pointing at a watch that no longer exists must not keep claiming to
+// be watched.
+// Re-acquire the handle: the reload above closed the one captured earlier.
+host.bb.storage
+  .database()
+  .exec(
+    "INSERT INTO decks (id,title,summary,status,target,shortstat,created_at,updated_at,watch_id)" +
+      " VALUES ('dk_x','t','','ready','{}','','now','now','wt_gone')",
+  );
+host = await host.harness.lifecycle.reload(plugin);
+const stale = host.bb.storage
+  .database()
+  .prepare("SELECT watch_id FROM decks WHERE id = 'dk_x'")
+  .get() as { watch_id: string | null };
+assert.equal(stale.watch_id, null, "a removed watch is cleared off its deck");
+
 await host.harness.lifecycle.dispose();
 console.log("PASS — an older database is repaired on load");

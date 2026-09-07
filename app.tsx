@@ -614,6 +614,99 @@ function DeckChat({
   );
 }
 
+/**
+ * Nothing is keeping this deck current — offer to point a merge request at it.
+ *
+ * A deck published from a conversation has no merge request recorded, so no
+ * amount of pushing will update it until one is named.
+ */
+function WatchThisDeck({
+  deckId,
+  onWatched,
+}: {
+  deckId: string;
+  onWatched: () => void;
+}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!open) {
+    return (
+      <div className="mt-3 border-t border-border pt-3">
+        <p className="text-[11px] text-muted-foreground">
+          Nothing is keeping this deck up to date — it is not linked to a merge
+          request.
+        </p>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-1 h-7 px-2 text-xs text-muted-foreground"
+          onClick={() => setOpen(true)}
+        >
+          <Icon name="Workflow" className="size-3.5" />
+          Keep it up to date
+        </Button>
+      </div>
+    );
+  }
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const link = url.trim();
+    if (link === "" || busy) return;
+    setBusy(true);
+    rpc
+      .call("deck_watch_mr", { deckId, url: link })
+      .then(
+        (result) => {
+          if (result.ok) {
+            toast.success(result.message);
+            setOpen(false);
+            onWatched();
+          } else {
+            toast.error(result.message);
+          }
+        },
+        (cause: unknown) => toast.error(String(cause)),
+      )
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-3 border-t border-border pt-3">
+      <p className="text-[12px] text-foreground">
+        Which merge request is this deck about?
+      </p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        The current commit counts as already reviewed — this deck is that
+        review. Only the next push triggers a re-review.
+      </p>
+      <div className="mt-2 flex items-center gap-2">
+        <Input
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          placeholder="Paste the merge request link…"
+          aria-label="Merge request link for this deck"
+        />
+        <Button type="submit" size="sm" className="h-8" disabled={busy || url.trim() === ""}>
+          {busy ? "Linking…" : "Link"}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8"
+          onClick={() => setOpen(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 /** What to do once you have been through the deck. */
 function NextSteps({ deckId, onCopy }: { deckId: string; onCopy: () => void }) {
   const rpc = useRpc<typeof rpcContract>();
@@ -767,6 +860,10 @@ function NextSteps({ deckId, onCopy }: { deckId: string; onCopy: () => void }) {
           Copy notes
         </Button>
       </div>
+
+      {info?.canPostToMr === false ? (
+        <WatchThisDeck deckId={deckId} onWatched={refetch} />
+      ) : null}
 
       {info?.chatWouldSpawn === true ? (
         <p className="mt-2 text-[11px] text-muted-foreground">

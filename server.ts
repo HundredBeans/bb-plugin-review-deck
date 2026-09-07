@@ -332,6 +332,16 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: z.object({ ok: z.boolean(), message: z.string() }),
   },
+  deck_watch_mr: {
+    input: z
+      .object({ deckId: z.string().min(1), url: z.string().min(1).max(2000) })
+      .strict(),
+    output: z.object({
+      ok: z.boolean(),
+      watchId: z.string().nullable(),
+      message: z.string(),
+    }),
+  },
   deck_attach: {
     input: z
       .object({ deckId: z.string().min(1), threadId: z.string().min(1) })
@@ -494,6 +504,19 @@ export default async function plugin(bb: BbPluginApi) {
   ensureColumn("slides", "patch_cache", "TEXT");
   ensureColumn("slide_state", "content_key", "TEXT");
   ensureColumn("annotation_verdict", "content_key", "TEXT");
+
+  // A watch removed before its deck's watch_id was cleared leaves the deck
+  // claiming to be kept current while nothing watches it. Cheap to re-check.
+  const orphaned = db
+    .prepare(
+      `UPDATE decks SET watch_id = NULL
+       WHERE watch_id IS NOT NULL
+         AND watch_id NOT IN (SELECT id FROM watches)`,
+    )
+    .run();
+  if (orphaned.changes > 0) {
+    bb.log.info(`cleared ${orphaned.changes} deck(s) pointing at a removed watch`);
+  }
 
   db.exec(`
     CREATE INDEX IF NOT EXISTS slides_by_deck ON slides (deck_id, position);
@@ -1672,6 +1695,109 @@ export default async function plugin(bb: BbPluginApi) {
     return { started: true, message: `Reviewing !${mr.iid}…` };
   }
 
+  /**
+   * Points a merge request at a deck that already exists.
+   *
+   * The head commit is recorded as already reviewed, so this does not kick off
+   * a review: the deck is the review. Only the next push triggers one, which
+   * is the whole point of attaching rather than starting over.
+   */
+  async function watchExistingDeck(
+    deckId: string,
+    url: string,
+  ): Promise<{ ok: boolean; watchId: string | null; message: string }> {
+    if (readDeckRow(deckId) === null) {
+      return { ok: false, watchId: null, message: `No deck with id ${deckId}.` };
+    }
+    const ref = parseMergeRequestUrl(url);
+    if (ref === null) {
+      return {
+        ok: false,
+        watchId: null,
+        message:
+          "That is not a merge request link. It should look like https://gitlab.example.com/group/project/-/merge_requests/42",
+      };
+    }
+    let mr;
+    try {
+      mr = await readMergeRequest(ref);
+    } catch (cause) {
+      return {
+        ok: false,
+        watchId: null,
+        message: cause instanceof Error ? cause.message : String(cause),
+      };
+    }
+
+    const canonical = `https://${ref.hostname}/${ref.projectPath}/-/merge_requests/${ref.iid}`;
+    const project = await findProject(ref, (await settings.get()).reviewProject);
+    const existing = db
+      .prepare(`SELECT id, deck_id FROM watches WHERE url = ?`)
+      .get(canonical) as { id: string; deck_id: string | null } | undefined;
+
+    const timestamp = now();
+    let watchId: string;
+    if (existing !== undefined) {
+      watchId = existing.id;
+      if (existing.deck_id !== null && existing.deck_id !== deckId) {
+        return {
+          ok: false,
+          watchId,
+          message: `!${ref.iid} is already watched, keeping a different deck up to date. Remove that watch first.`,
+        };
+      }
+    } else {
+      watchId = `wt_${randomUUID().slice(0, 12)}`;
+      db.prepare(
+        `INSERT INTO watches
+           (id, url, hostname, project_path, iid, title, target_branch, mr_state,
+            draft, bb_project_id, prompt, enabled, state, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', 1, 'idle', ?, ?)`,
+      ).run(
+        watchId,
+        canonical,
+        ref.hostname,
+        ref.projectPath,
+        ref.iid,
+        mr.title,
+        mr.targetBranch,
+        mr.state,
+        mr.draft ? 1 : 0,
+        project?.id ?? null,
+        timestamp,
+        timestamp,
+      );
+    }
+
+    // Already reviewed at this commit: that is what the deck is.
+    setWatch(watchId, {
+      deck_id: deckId,
+      title: mr.title,
+      target_branch: mr.targetBranch,
+      mr_state: mr.state,
+      draft: mr.draft ? 1 : 0,
+      head_sha: mr.sha,
+      last_sha: mr.sha,
+      last_reviewed_at: timestamp,
+      last_checked_at: timestamp,
+      failed_sha: null,
+      failure_count: 0,
+      state: "idle",
+      last_error: null,
+    });
+    db.prepare(`UPDATE decks SET watch_id = ?, updated_at = ? WHERE id = ?`).run(
+      watchId,
+      timestamp,
+      deckId,
+    );
+    changed();
+    return {
+      ok: true,
+      watchId,
+      message: `Watching !${ref.iid}. This deck is up to date now, and will be re-reviewed on the next push.`,
+    };
+  }
+
   /** Adds a watch and kicks off its first review. Shared by RPC and CLI. */
   async function addWatch(input: {
     url: string;
@@ -2732,7 +2858,13 @@ export default async function plugin(bb: BbPluginApi) {
 
     watch_remove: ({ watchId }) => {
       const result = db.prepare(`DELETE FROM watches WHERE id = ?`).run(watchId);
-      if (result.changes > 0) watchChanged();
+      // Otherwise the deck still claims a watch that is gone, and reports
+      // itself as kept up to date when nothing is watching it.
+      db.prepare(`UPDATE decks SET watch_id = NULL WHERE watch_id = ?`).run(watchId);
+      if (result.changes > 0) {
+        watchChanged();
+        changed();
+      }
       return { removed: result.changes > 0 };
     },
 
@@ -2920,6 +3052,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { ok: true, message: "Asked this thread to publish its review." };
     },
 
+    deck_watch_mr: ({ deckId, url }) => watchExistingDeck(deckId, url),
     deck_attach: ({ deckId, threadId }) => {
       if (readDeckRow(deckId) === null) {
         throw new Error(`No deck with id ${deckId}`);
@@ -3407,9 +3540,16 @@ export default async function plugin(bb: BbPluginApi) {
         target: diffTargetSchema
           .nullish()
           .describe("Which diff this deck reviews. Omit for the default."),
+        mergeRequestUrl: z
+          .string()
+          .max(2000)
+          .nullish()
+          .describe(
+            "The merge request this reviews, if there is one. Pass it and BB keeps this deck up to date on every later push — without re-reviewing the commit you just looked at.",
+          ),
       })
       .strict(),
-    async execute({ title, summary, target }, ctx) {
+    async execute({ title, summary, target, mergeRequestUrl }, ctx) {
       const { environmentId, projectId } = await environmentForThread(
         ctx.threadId,
       );
@@ -3520,11 +3660,20 @@ export default async function plugin(bb: BbPluginApi) {
       if (watch !== null) setWatch(watch.id, { deck_id: deckId });
       changed();
       await pruneDecks(projectId ?? ctx.projectId ?? null);
+
+      // Named a merge request: keep this deck current from now on, without
+      // re-reviewing the commit this review is of.
+      let watching: string | null = null;
+      if ((mergeRequestUrl ?? "").trim() !== "" && watch === null) {
+        const bound = await watchExistingDeck(deckId, mergeRequestUrl as string);
+        watching = bound.message;
+      }
       return JSON.stringify({
         deckId,
         url: deckPath(deckId),
         target: resolved,
         shortstat,
+        ...(watching === null ? {} : { watching }),
         next: "Call review_deck_add_slide once per group of related changes.",
       });
     },
@@ -3796,6 +3945,7 @@ export default async function plugin(bb: BbPluginApi) {
     "  bb review-deck review-thread [--prompt \"...\"]",
     "",
     "  bb review-deck post <deck-id>           Post agreed findings to the MR",
+    "  bb review-deck watch-deck <deck-id> <mr-url>   Keep a deck up to date",
     "  bb review-deck poll                     Check every watch now",
     "",
     "The deck.json file holds { title, summary?, target?, slides: [...] }.",
@@ -3870,6 +4020,12 @@ export default async function plugin(bb: BbPluginApi) {
         summary:
           "Post the findings you agreed with to the merge request, on their lines",
         usage: "bb review-deck post <deck-id>",
+      },
+      {
+        name: "watch-deck",
+        summary:
+          "Point a merge request at a deck that already exists, without re-reviewing it",
+        usage: "bb review-deck watch-deck <deck-id> <merge-request-url>",
       },
       {
         name: "poll",
@@ -4118,6 +4274,15 @@ export default async function plugin(bb: BbPluginApi) {
           return result.posted > 0 || result.failed.length === 0
             ? reply(result, text)
             : { exitCode: 1, stderr: text };
+        }
+
+        case "watch-deck": {
+          const [deckId, url] = rest;
+          if (deckId === undefined || url === undefined) break;
+          const result = await watchExistingDeck(deckId, url);
+          return result.ok
+            ? reply(result, result.message)
+            : { exitCode: 1, stderr: result.message };
         }
 
         case "poll": {

@@ -41,6 +41,11 @@ found in chat instead.
 3. **Create the deck**: `review_deck_create` with a `title` and a `summary` of
    two to four sentences. It returns a `deckId`.
 
+   If you are reviewing a merge request, pass its URL as `mergeRequestUrl`.
+   BB then keeps this deck up to date on every later push, without re-reviewing
+   the commit you just looked at. Leave it out and nothing will ever update the
+   deck, because BB has no way to know which merge request it was about.
+
 4. **Add each slide**: `review_deck_add_slide`, once per slide, in the order the
    reviewer should see them.
 

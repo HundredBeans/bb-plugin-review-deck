@@ -159,6 +159,25 @@ at any time; a paused watch never starts on its own.
 GitHub is not supported yet. The GitLab-specific parts are confined to
 `lib/gitlab.ts` and the `glabApi` helper in `server.ts`.
 
+## Keeping an existing deck up to date
+
+A deck published from a conversation has **no merge request recorded** — the
+plugin never learns which one it is about, so no amount of pushing will update
+it. A deck in that state says so, with **Keep it up to date**: paste the merge
+request link and it becomes a watch.
+
+The current commit is recorded as **already reviewed**, because this deck is
+that review. Linking does not kick off another one; only the next push does,
+and it rewrites this deck rather than making a new one.
+
+An agent can do it as it publishes, by passing `mergeRequestUrl` to
+`review_deck_create` — then the common case needs no follow-up at all.
+
+From a shell: `bb review-deck watch-deck <deck-id> <merge-request-url>`.
+
+If that merge request is already watched by a different deck, linking is
+refused rather than quietly taking it over.
+
 ## Reviewing a thread's own changes
 
 You do not need a merge request. Open any thread's right panel, pick
@@ -376,6 +395,7 @@ Layout:
 | `tests/attach.mts` | A deck links to a thread that did not create it. |
 | `tests/publish-in-place.mts` | An existing review becomes a deck without being redone. |
 | `tests/chat-target.mts` | Talking lands in the deck's existing conversation. |
+| `tests/watch-existing-deck.mts` | A deck is kept current without being re-reviewed first. |
 
 ## Changelog
 

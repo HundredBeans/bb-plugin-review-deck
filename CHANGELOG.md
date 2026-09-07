@@ -10,6 +10,27 @@ Notable changes to Review Deck. Follows [Keep a Changelog][kac]; versions are
 
 Nothing yet.
 
+## [0.3.0] — 2026-09-07
+
+### Added
+
+- **Keep an existing deck up to date.** A deck published from a conversation
+  had no merge request recorded, so nothing ever updated it — no watch, no
+  re-review on push. Such a deck now says so and offers **Keep it up to date**;
+  paste the link and it becomes a watch. The current commit counts as already
+  reviewed, because the deck is that review, so linking starts nothing and only
+  the next push triggers a re-review, into the same deck. Agents can do it as
+  they publish by passing `mergeRequestUrl` to `review_deck_create`. Also
+  `bb review-deck watch-deck <deck-id> <mr-url>`. Linking a merge request that
+  another deck already watches is refused rather than silently taken over.
+- A changelog.
+
+### Fixed
+
+- **Removing a watch left its deck claiming to be watched.** `decks.watch_id`
+  was not cleared, so the deck reported itself as kept current while nothing
+  was watching it. Existing rows are repaired on load.
+
 ## [0.2.0] — 2026-09-07
 
 ### Added
@@ -85,6 +106,7 @@ First release.
   commit, with a watch pausing itself after three failures; concurrent review
   requests spawn one agent, not two.
 
-[Unreleased]: https://github.com/HundredBeans/bb-plugin-review-deck/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/HundredBeans/bb-plugin-review-deck/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/HundredBeans/bb-plugin-review-deck/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/HundredBeans/bb-plugin-review-deck/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/HundredBeans/bb-plugin-review-deck/releases/tag/v0.1.0
