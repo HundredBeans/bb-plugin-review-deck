@@ -1769,8 +1769,13 @@ export default async function plugin(bb: BbPluginApi) {
       );
     }
 
+    // A merged or closed merge request will never move again, so watching it
+    // would poll for ever and never re-review. Link it anyway — that is what
+    // makes posting findings to it possible — but do not have it poll.
+    const settled = mr.state !== "opened";
     // Already reviewed at this commit: that is what the deck is.
     setWatch(watchId, {
+      enabled: settled ? 0 : 1,
       deck_id: deckId,
       title: mr.title,
       target_branch: mr.targetBranch,
@@ -1794,7 +1799,9 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       ok: true,
       watchId,
-      message: `Watching !${ref.iid}. This deck is up to date now, and will be re-reviewed on the next push.`,
+      message: settled
+        ? `Linked to !${ref.iid}, which is ${mr.state}. You can post findings to it, but it will not be re-reviewed — nothing will push to it again.`
+        : `Watching !${ref.iid}. This deck is up to date now, and will be re-reviewed on the next push.`,
     };
   }
 
@@ -2195,7 +2202,14 @@ export default async function plugin(bb: BbPluginApi) {
         head_sha: mr.sha,
         last_checked_at: now(),
       });
-      if (mr.state !== "opened") continue;
+      if (mr.state !== "opened") {
+        // It will never move again; stop checking it every few minutes.
+        if (row.enabled === 1) {
+          bb.log.info(`${row.url} is ${mr.state}; pausing its watch`);
+          setWatch(row.id, { enabled: 0 });
+        }
+        continue;
+      }
       if (mr.draft && !reviewDraftMrs) continue;
       if (mr.sha === "" || mr.sha === row.last_sha) continue;
       // One automatic attempt per commit. A review that was stopped or that

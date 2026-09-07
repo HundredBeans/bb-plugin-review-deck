@@ -94,6 +94,30 @@ const bad = await harness.behavior.callRpc("deck_watch_mr", {
 assert.equal(bad.ok, false);
 assert.match(String(bad.message), /not a merge request link/i);
 
+// --- a merged merge request links, but does not poll ---------------------
+process.env.FAKE_MR_STATE = "merged";
+const merged = JSON.parse(String(await harness.behavior.callAgentTool(
+  "review_deck_create", { title: "A merged review", summary: "" }, ctx)));
+const mergedLink = await harness.behavior.callRpc("deck_watch_mr", {
+  deckId: merged.deckId,
+  url: "https://gitlab.example.com/acme/widgets/-/merge_requests/200",
+});
+assert.equal(mergedLink.ok, true, mergedLink.message);
+assert.match(String(mergedLink.message), /merged/i, "says it is merged");
+assert.match(String(mergedLink.message), /not be re-reviewed/i, "and why that matters");
+
+const canPost = await harness.behavior.callRpc("deck_next_actions", {
+  deckId: merged.deckId,
+});
+assert.equal(canPost.canPostToMr, true, "findings can still be posted to it");
+
+const watches = (await harness.behavior.callRpc("watches_list", null)).watches as {
+  iid: number; enabled: boolean;
+}[];
+const mergedWatch = watches.find((w) => w.iid === 200)!;
+assert.equal(mergedWatch.enabled, false, "but it does not poll");
+
+delete process.env.FAKE_MR_STATE;
 delete process.env.FAKE_MR_SHA;
 await harness.lifecycle.dispose();
 console.log("PASS — a deck can be kept current without being re-reviewed first");

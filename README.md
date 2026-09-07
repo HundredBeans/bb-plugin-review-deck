@@ -178,6 +178,11 @@ From a shell: `bb review-deck watch-deck <deck-id> <merge-request-url>`.
 If that merge request is already watched by a different deck, linking is
 refused rather than quietly taking it over.
 
+**A merged or closed merge request links but does not poll.** You can still
+post findings to it; it just will not be re-reviewed, because nothing will push
+to it again. A watch whose merge request settles pauses itself on the next
+sweep rather than checking it for ever.
+
 ## Reviewing a thread's own changes
 
 You do not need a merge request. Open any thread's right panel, pick

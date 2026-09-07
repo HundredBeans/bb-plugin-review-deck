@@ -8,7 +8,13 @@ Notable changes to Review Deck. Follows [Keep a Changelog][kac]; versions are
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **A merged or closed merge request no longer polls.** Linking one still works
+  — that is what makes posting findings to it possible — but it is created
+  paused, because nothing will ever push to it again. A watch whose merge
+  request settles pauses itself on the next sweep instead of checking it every
+  few minutes for ever.
 
 ## [0.3.0] — 2026-09-07
 
