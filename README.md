@@ -173,6 +173,25 @@ The reviewer shares the thread's workspace rather than getting its own, so it
 is only stopped when it finishes — never archived, because archiving the last
 thread of a managed worktree destroys the worktree.
 
+## Attaching a deck to a thread
+
+A deck normally belongs to the thread that made it — the reviewer, the thread
+whose work was reviewed, or its own chat. Sometimes the thread you are in is
+about a deck it did not create.
+
+- **Fix the N agreed findings** attaches the deck to the thread it opens, so
+  the slides are beside you while you work through them.
+- **Attach an existing deck** in any thread's **Review deck** panel links a
+  deck by hand: pick one and it shows up there, labelled as attached rather
+  than as a review of that thread. **Detach** removes the link.
+
+An attached deck also becomes the deck an agent in that thread means by "this
+deck", so `review_deck_read` and `review_deck_edit` work with no id — you can
+fix a finding and correct the deck in the same conversation.
+
+Attaching links, it does not copy: one deck, one set of your answers, however
+many threads point at it. Deleting the deck drops every link.
+
 ## Seeing what a review is doing
 
 - The watch row shows `N slides so far, M findings · started Xm ago` while a
@@ -329,6 +348,7 @@ Layout:
 | `tests/chat-intent.mts` | The chat opens as a question, not as a verdict. |
 | `tests/runner-panel.mts` | A reviewer thread shows its review, deck or not. |
 | `tests/deck-edit.mts` | A deck edits in place without losing your answers. |
+| `tests/attach.mts` | A deck links to a thread that did not create it. |
 
 ## License
 

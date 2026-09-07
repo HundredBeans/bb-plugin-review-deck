@@ -318,6 +318,16 @@ export const rpcContract = defineRpcContract({
       ),
     }),
   },
+  deck_attach: {
+    input: z
+      .object({ deckId: z.string().min(1), threadId: z.string().min(1) })
+      .strict(),
+    output: z.object({ ok: z.literal(true) }),
+  },
+  deck_detach: {
+    input: z.object({ threadId: z.string().min(1) }).strict(),
+    output: z.object({ detached: z.boolean() }),
+  },
   thread_review_status: {
     input: z.object({ threadId: z.string().min(1) }).strict(),
     output: z.object({
@@ -330,6 +340,9 @@ export const rpcContract = defineRpcContract({
       /** What the runner is reviewing, for the panel heading. */
       reviewing: z.string().nullable(),
       canStartReview: z.boolean(),
+      /** Set when the deck is linked to this thread rather than made by it. */
+      attachedAs: z.string().nullable(),
+      attachedDeckTitle: z.string().nullable(),
     }),
   },
 });
@@ -434,6 +447,15 @@ export default async function plugin(bb: BbPluginApi) {
     );
     -- The previous version of a deck, held while it is being rewritten so a
     -- review that dies half way through cannot destroy a deck you already read.
+    -- Threads a deck is about beyond the three it owns columns for: the
+    -- thread opened to fix its findings, and any thread you attach by hand.
+    CREATE TABLE IF NOT EXISTS deck_threads (
+      deck_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'attached',
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (deck_id, thread_id)
+    );
     CREATE TABLE IF NOT EXISTS slides_backup (
       id TEXT PRIMARY KEY,
       deck_id TEXT NOT NULL,
@@ -467,6 +489,8 @@ export default async function plugin(bb: BbPluginApi) {
       ON slide_state (deck_id, content_key);
     CREATE INDEX IF NOT EXISTS thread_runs_by_source
       ON thread_runs (source_thread_id);
+    CREATE INDEX IF NOT EXISTS deck_threads_by_thread
+      ON deck_threads (thread_id);
   `);
 
   const settings = bb.settings.define({
@@ -657,6 +681,7 @@ export default async function plugin(bb: BbPluginApi) {
   function deleteDeck(deckId: string): boolean {
     const result = db.prepare(`DELETE FROM decks WHERE id = ?`).run(deckId);
     db.prepare(`DELETE FROM slides_backup WHERE deck_id = ?`).run(deckId);
+    db.prepare(`DELETE FROM deck_threads WHERE deck_id = ?`).run(deckId);
     db.prepare(`UPDATE watches SET deck_id = NULL WHERE deck_id = ?`).run(deckId);
     db.prepare(`DELETE FROM slides WHERE deck_id = ?`).run(deckId);
     db.prepare(`DELETE FROM slide_state WHERE deck_id = ?`).run(deckId);
@@ -2514,7 +2539,10 @@ export default async function plugin(bb: BbPluginApi) {
         prompt,
       });
       // Both chat intents share the deck's one conversation.
-      if (intent !== "fix") {
+      if (intent === "fix") {
+        // So the deck is right there while the findings are being fixed.
+        attachDeckToThread(deckId, thread.id, "fix");
+      } else {
         db.prepare(
           `UPDATE decks SET discussion_thread_id = ?, updated_at = ? WHERE id = ?`,
         ).run(thread.id, now(), deckId);
@@ -2777,6 +2805,20 @@ export default async function plugin(bb: BbPluginApi) {
       };
     },
     deck_post_to_mr: ({ deckId }) => postDeckToMr(deckId),
+    deck_attach: ({ deckId, threadId }) => {
+      if (readDeckRow(deckId) === null) {
+        throw new Error(`No deck with id ${deckId}`);
+      }
+      attachDeckToThread(deckId, threadId, "attached");
+      return { ok: true as const };
+    },
+    deck_detach: ({ threadId }) => {
+      const result = db
+        .prepare(`DELETE FROM deck_threads WHERE thread_id = ?`)
+        .run(threadId);
+      if (result.changes > 0) changed();
+      return { detached: result.changes > 0 };
+    },
     thread_review_status: ({ threadId }) => {
       const countSlides = (deckId: string | null) =>
         deckId === null
@@ -2806,6 +2848,8 @@ export default async function plugin(bb: BbPluginApi) {
           isRunner: true,
           reviewing: `!${liveWatch.iid} — ${liveWatch.title}`,
           canStartReview: false,
+          attachedAs: null,
+          attachedDeckTitle: null,
         };
       }
       const liveRun = threadRunForRunner(threadId);
@@ -2819,6 +2863,8 @@ export default async function plugin(bb: BbPluginApi) {
           isRunner: true,
           reviewing: "this thread's changes",
           canStartReview: false,
+          attachedAs: null,
+          attachedDeckTitle: null,
         };
       }
 
@@ -2841,6 +2887,8 @@ export default async function plugin(bb: BbPluginApi) {
           isRunner: true,
           reviewing: written.title,
           canStartReview: false,
+          attachedAs: null,
+          attachedDeckTitle: null,
         };
       }
 
@@ -2853,6 +2901,34 @@ export default async function plugin(bb: BbPluginApi) {
            ORDER BY created_at DESC LIMIT 1`,
         )
         .get(threadId, threadId) as { id: string } | undefined;
+
+      // Nothing of its own: a deck may still be linked here, by a fix run or
+      // because you attached one.
+      if (own === undefined) {
+        const link = db
+          .prepare(
+            `SELECT t.deck_id, t.role, d.title FROM deck_threads t
+             JOIN decks d ON d.id = t.deck_id
+             WHERE t.thread_id = ? ORDER BY t.created_at DESC LIMIT 1`,
+          )
+          .get(threadId) as
+          | { deck_id: string; role: string; title: string }
+          | undefined;
+        if (link !== undefined) {
+          return {
+            running: false,
+            runThreadId: null,
+            deckId: link.deck_id,
+            slideCount: countSlides(link.deck_id),
+            isRunner: false,
+            reviewing: null,
+            canStartReview: true,
+            attachedAs: link.role,
+            attachedDeckTitle: link.title,
+          };
+        }
+      }
+
       const deckId = own?.id ?? null;
       return {
         running: run !== null,
@@ -2862,6 +2938,8 @@ export default async function plugin(bb: BbPluginApi) {
         isRunner: false,
         reviewing: null,
         canStartReview: true,
+        attachedAs: null,
+        attachedDeckTitle: null,
       };
     },
   });
@@ -2889,7 +2967,33 @@ export default async function plugin(bb: BbPluginApi) {
         .get(threadId) as { id: string } | undefined;
       if (row !== undefined) return row.id;
     }
-    return null;
+    return attachedDeckForThread(threadId);
+  }
+
+  /** A deck linked to this thread by a fix run or by hand. */
+  function attachedDeckForThread(threadId: string): string | null {
+    const row = db
+      .prepare(
+        `SELECT d.id FROM deck_threads t
+         JOIN decks d ON d.id = t.deck_id
+         WHERE t.thread_id = ?
+         ORDER BY t.created_at DESC LIMIT 1`,
+      )
+      .get(threadId) as { id: string } | undefined;
+    return row?.id ?? null;
+  }
+
+  function attachDeckToThread(
+    deckId: string,
+    threadId: string,
+    role: string,
+  ): void {
+    db.prepare(
+      `INSERT INTO deck_threads (deck_id, thread_id, role, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(deck_id, thread_id) DO UPDATE SET role = excluded.role`,
+    ).run(deckId, threadId, role, now());
+    changed();
   }
 
   function renumberSlides(deckId: string): void {

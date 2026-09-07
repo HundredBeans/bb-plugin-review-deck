@@ -437,6 +437,97 @@ function DeckViewer({
   );
 }
 
+/** Attach a deck that already exists to the thread you are in. */
+function AttachDeck({
+  threadId,
+  onAttached,
+}: {
+  threadId: string;
+  onAttached: () => void;
+}) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [open, setOpen] = useState(false);
+  const [decks, setDecks] = useState<DeckSummary[] | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    rpc.call("decks_list", {}).then(
+      (result) => setDecks(result.decks as DeckSummary[]),
+      () => setDecks([]),
+    );
+  }, [open, rpc]);
+
+  if (!open) {
+    return (
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2 text-xs text-muted-foreground"
+        onClick={() => setOpen(true)}
+      >
+        <Icon name="Folder" className="size-3.5" />
+        Attach an existing deck
+      </Button>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-card px-3 py-2">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 text-[13px] text-foreground">
+          Which deck is this thread about?
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 text-muted-foreground"
+          aria-label="Cancel"
+          onClick={() => setOpen(false)}
+        >
+          <Icon name="X" className="size-3.5" />
+        </Button>
+      </div>
+      {decks === null ? (
+        <p className="mt-2 text-[12px] text-muted-foreground">Loading…</p>
+      ) : decks.length === 0 ? (
+        <p className="mt-2 text-[12px] text-muted-foreground">No decks yet.</p>
+      ) : (
+        <ul className="mt-2 max-h-56 list-none space-y-1 overflow-y-auto">
+          {decks.map((deck) => (
+            <li key={deck.id}>
+              <button
+                type="button"
+                className="block w-full rounded border-0 bg-transparent px-2 py-1.5 text-left hover:bg-accent"
+                onClick={() => {
+                  rpc
+                    .call("deck_attach", { deckId: deck.id, threadId })
+                    .then(
+                      () => {
+                        toast.success("Deck attached to this thread.");
+                        setOpen(false);
+                        onAttached();
+                      },
+                      (cause: unknown) => toast.error(String(cause)),
+                    );
+                }}
+              >
+                <span className="block truncate text-[13px] text-foreground">
+                  {deck.title}
+                </span>
+                <span className="block text-[11px] text-muted-foreground">
+                  {deck.slideCount} slide{deck.slideCount === 1 ? "" : "s"},{" "}
+                  {deck.annotationCount} finding
+                  {deck.annotationCount === 1 ? "" : "s"}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** BB's real chat, beside the deck, on a conversation that belongs to it. */
 function DeckChat({
   deckId,
@@ -1269,6 +1360,8 @@ function ThreadDeckPanel({ threadId }: { threadId: string }) {
     isRunner: boolean;
     reviewing: string | null;
     canStartReview: boolean;
+    attachedAs: string | null;
+    attachedDeckTitle: string | null;
   } | null>(null);
   const [index, setIndex] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -1285,6 +1378,8 @@ function ThreadDeckPanel({ threadId }: { threadId: string }) {
         isRunner: false,
         reviewing: null,
         canStartReview: true,
+        attachedAs: null,
+        attachedDeckTitle: null,
       }),
     );
   }, [rpc, threadId]);
@@ -1365,6 +1460,35 @@ function ThreadDeckPanel({ threadId }: { threadId: string }) {
     );
   }
 
+  const attachRow =
+    status.attachedAs !== null ? (
+      <div className="rounded-lg border border-border bg-card px-3 py-2">
+        <p className="text-[13px] text-foreground">
+          {status.attachedAs === "fix"
+            ? "You are fixing findings from this deck."
+            : "This deck is attached to this thread."}
+        </p>
+        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+          {status.attachedDeckTitle}
+        </p>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="mt-1 h-7 px-2 text-xs text-muted-foreground"
+          onClick={() => {
+            rpc
+              .call("deck_detach", { threadId })
+              .then(refetch, (cause: unknown) => toast.error(String(cause)));
+          }}
+        >
+          <Icon name="X" className="size-3.5" />
+          Detach
+        </Button>
+      </div>
+    ) : (
+      <AttachDeck threadId={threadId} onAttached={refetch} />
+    );
+
   const starter = (
     <div className="rounded-lg border border-border bg-card px-3 py-3">
       <p className="text-[13px] text-foreground">
@@ -1424,11 +1548,19 @@ function ThreadDeckPanel({ threadId }: { threadId: string }) {
     </div>
   );
 
-  if (status.deckId === null) return <div className="space-y-3">{starter}</div>;
+  if (status.deckId === null) {
+    return (
+      <div className="space-y-3">
+        {starter}
+        {attachRow}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
-      {starter}
+      {status.attachedAs === null ? starter : null}
+      {attachRow}
       <Button
         variant="ghost"
         size="sm"
