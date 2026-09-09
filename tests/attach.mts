@@ -91,6 +91,34 @@ const author = await harness.behavior.callRpc("thread_review_status", {
 assert.equal(author.deckId, deck.deckId, "the authoring thread still finds its deck");
 assert.equal(author.attachedAs, null, "and it is not merely 'attached'");
 
+// --- an automatic fix link does not hijack the chat ---------------------
+const chatBefore = await harness.behavior.callRpc("deck_next_actions", {
+  deckId: deck.deckId,
+});
+assert.equal(
+  chatBefore.chatThreadId,
+  "thr_author",
+  "the fix thread linked earlier must not become where you talk",
+);
+
+// --- attaching redirects a deck whose only chat the plugin opened -------
+bb.storage
+  .database()
+  .prepare(`UPDATE decks SET discussion_thread_id = 'thr_sidechat' WHERE id = ?`)
+  .run(deck.deckId);
+await harness.behavior.callRpc("deck_attach", {
+  deckId: deck.deckId, threadId: "thr_chosen",
+});
+const chat = await harness.behavior.callRpc("deck_next_actions", {
+  deckId: deck.deckId,
+});
+assert.equal(
+  chat.chatThreadId,
+  "thr_chosen",
+  "a thread you attached beats a chat the plugin opened for itself",
+);
+await harness.behavior.callRpc("deck_detach", { threadId: "thr_chosen" });
+
 // --- deleting the deck drops the links ----------------------------------
 await harness.behavior.callRpc("deck_delete", { deckId: deck.deckId });
 const orphan = await harness.behavior.callRpc("thread_review_status", {

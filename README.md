@@ -59,15 +59,24 @@ steps, do not touch any files. It works in the right workspace, so it can read
 the code to answer you.
 
 **Talking lands where the conversation already is.** A new thread is the last
-resort, not the first move. In order, a chat about a deck goes to: the deck's
-own chat if it has one, the thread an agent wrote it in, the thread it
-reviewed, or a thread you attached it to. Only when none of those is still
-around does it open a new one — and the button says so before you press it,
-naming the thread it will post to.
+resort, not the first move. A chat about a deck goes to, in order:
 
-Whichever thread it lands in becomes the deck's chat, so the Chat panel and the
-next press agree. When you finish, **Send my notes to "…"** at the end of the
-deck hands over what you decided, in that same conversation.
+1. a thread you **attached** the deck to — you chose it, so it wins;
+2. the conversation the deck **came from**: the thread an agent wrote it in, or
+   the thread whose work was reviewed;
+3. a chat this plugin opened earlier for that deck;
+4. only if none of those is usable, a new thread.
+
+A link made for you when a **fix** thread opened does not count for this. That
+thread is for doing the work, not for talking about the review.
+
+The button names the thread it will post to, and says outright when it would
+have to open a new one. A watch you started from the deck page has no
+originating conversation, so its chat is one this plugin opened — attach the
+deck to a thread if you would rather talk somewhere else.
+
+When you finish, **Send my notes to "…"** at the end of the deck hands over
+what you decided, in that same conversation.
 
 **You can ask it to change the deck.** "Drop that finding", "that is a nit not
 a blocker", "the line number is wrong", "add a slide about the migration" — the

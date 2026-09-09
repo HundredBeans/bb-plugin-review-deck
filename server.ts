@@ -501,9 +501,18 @@ export default async function plugin(bb: BbPluginApi) {
   ensureColumn("decks", "watch_id", "TEXT");
   ensureColumn("decks", "source_thread_id", "TEXT");
   ensureColumn("decks", "discussion_thread_id", "TEXT");
+  ensureColumn("decks", "origin_thread_id", "TEXT");
   ensureColumn("slides", "patch_cache", "TEXT");
   ensureColumn("slide_state", "content_key", "TEXT");
   ensureColumn("annotation_verdict", "content_key", "TEXT");
+
+  // Older decks recorded no origin. The thread a review ran in is archived
+  // when the run ends, so reading through the usable check below picks a real
+  // conversation and skips a reviewer.
+  db.prepare(
+    `UPDATE decks SET origin_thread_id = COALESCE(source_thread_id, thread_id)
+     WHERE origin_thread_id IS NULL`,
+  ).run();
 
   // A watch removed before its deck's watch_id was cleared leaves the deck
   // claiming to be kept current while nothing watches it. Cheap to re-check.
@@ -1705,6 +1714,8 @@ export default async function plugin(bb: BbPluginApi) {
   async function watchExistingDeck(
     deckId: string,
     url: string,
+    /** The thread this was asked for from, if any — it becomes the origin. */
+    fromThreadId?: string,
   ): Promise<{ ok: boolean; watchId: string | null; message: string }> {
     if (readDeckRow(deckId) === null) {
       return { ok: false, watchId: null, message: `No deck with id ${deckId}.` };
@@ -1795,6 +1806,11 @@ export default async function plugin(bb: BbPluginApi) {
       timestamp,
       deckId,
     );
+    if (fromThreadId !== undefined) {
+      db.prepare(
+        `UPDATE decks SET origin_thread_id = COALESCE(origin_thread_id, ?) WHERE id = ?`,
+      ).run(fromThreadId, deckId);
+    }
     changed();
     return {
       ok: true,
@@ -2259,19 +2275,23 @@ export default async function plugin(bb: BbPluginApi) {
   async function replyTargetForDeck(deckId: string): Promise<string | null> {
     const row = db
       .prepare(
-        `SELECT thread_id, source_thread_id, watch_id FROM decks WHERE id = ?`,
+        `SELECT thread_id, source_thread_id, origin_thread_id FROM decks WHERE id = ?`,
       )
       .get(deckId) as
       | {
           thread_id: string | null;
           source_thread_id: string | null;
-          watch_id: string | null;
+          origin_thread_id: string | null;
         }
       | undefined;
     if (row === undefined) return null;
+    // No watch_id test here on purpose. A deck written in your conversation and
+    // later linked to a merge request still belongs to that conversation; the
+    // thread of a real review run is archived, so the usable check drops it.
     const candidates = [
+      row.origin_thread_id,
       row.source_thread_id,
-      row.watch_id === null ? row.thread_id : null,
+      row.thread_id,
       // A thread you attached the deck to, or one opened to fix its findings.
       attachedDeckThreadFor(deckId),
     ].filter((id): id is string => id !== null);
@@ -2281,14 +2301,29 @@ export default async function plugin(bb: BbPluginApi) {
     return null;
   }
 
-  /** A thread linked to this deck through deck_threads, newest first. */
-  function attachedDeckThreadFor(deckId: string): string | null {
-    const row = db
-      .prepare(
-        `SELECT thread_id FROM deck_threads WHERE deck_id = ?
-         ORDER BY created_at DESC LIMIT 1`,
-      )
-      .get(deckId) as { thread_id: string } | undefined;
+  /**
+   * A thread linked to this deck through deck_threads, newest first.
+   *
+   * `role` narrows it. Attaching by hand ("attached") is a choice you made, so
+   * it outranks the conversation the deck came from; a link made for you when
+   * a fix thread opened ("fix") does not — that thread is for doing the work,
+   * not for talking about the review.
+   */
+  function attachedDeckThreadFor(
+    deckId: string,
+    role?: string,
+  ): string | null {
+    const row = (
+      role === undefined
+        ? db.prepare(
+            `SELECT thread_id FROM deck_threads WHERE deck_id = ?
+             ORDER BY created_at DESC LIMIT 1`,
+          ).get(deckId)
+        : db.prepare(
+            `SELECT thread_id FROM deck_threads WHERE deck_id = ? AND role = ?
+             ORDER BY created_at DESC LIMIT 1`,
+          ).get(deckId, role)
+    ) as { thread_id: string } | undefined;
     return row?.thread_id ?? null;
   }
 
@@ -2311,9 +2346,36 @@ export default async function plugin(bb: BbPluginApi) {
    * context, and spawning a fresh agent throws it away.
    */
   async function chatTargetForDeck(deckId: string): Promise<string | null> {
+    // The conversation you started from comes first, ahead of any chat this
+    // plugin opened. A spawned chat used to be recorded as the deck's
+    // conversation and then won for ever, which sent you to an empty side
+    // thread instead of the one that has the history.
+    // In order: a thread you attached on purpose, the conversation this deck
+    // came from, then any other link, then a chat this plugin opened, and only
+    // then a new thread.
+    const chosen = attachedDeckThreadFor(deckId, "attached");
+    if (chosen !== null && (await threadIsUsable(chosen))) return chosen;
+    const origin = await originThreadForDeck(deckId);
+    if (origin !== null) return origin;
     const chat = await discussionThreadForDeck(deckId);
     if (chat !== null) return chat;
     return replyTargetForDeck(deckId);
+  }
+
+  /** The conversation this deck came from, if it is still usable. */
+  async function originThreadForDeck(deckId: string): Promise<string | null> {
+    const row = db
+      .prepare(
+        `SELECT origin_thread_id, source_thread_id FROM decks WHERE id = ?`,
+      )
+      .get(deckId) as
+      | { origin_thread_id: string | null; source_thread_id: string | null }
+      | undefined;
+    for (const candidate of [row?.origin_thread_id, row?.source_thread_id]) {
+      if (candidate == null) continue;
+      if (await threadIsUsable(candidate)) return candidate;
+    }
+    return null;
   }
 
   function sourceThreadForDeck(deckId: string): string | null {
@@ -3591,6 +3653,10 @@ export default async function plugin(bb: BbPluginApi) {
           backUpSlides(existing);
           db.prepare(`DELETE FROM slides WHERE deck_id = ?`).run(existing);
           db.prepare(
+            `UPDATE decks SET origin_thread_id = COALESCE(origin_thread_id, ?)
+             WHERE id = ?`,
+          ).run(threadRun.source_thread_id, existing);
+          db.prepare(
             `UPDATE decks SET title = ?, summary = ?, status = 'draft',
                               environment_id = ?, thread_id = ?, target = ?,
                               shortstat = ?, updated_at = ?
@@ -3655,8 +3721,8 @@ export default async function plugin(bb: BbPluginApi) {
       const deckId = `dk_${randomUUID().slice(0, 12)}`;
       db.prepare(
         `INSERT INTO decks
-           (id, title, summary, status, project_id, environment_id, thread_id, target, shortstat, created_at, updated_at, watch_id, source_thread_id)
-         VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, title, summary, status, project_id, environment_id, thread_id, target, shortstat, created_at, updated_at, watch_id, source_thread_id, origin_thread_id)
+         VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         deckId,
         title,
@@ -3670,6 +3736,13 @@ export default async function plugin(bb: BbPluginApi) {
         timestamp,
         watch?.id ?? null,
         threadRun?.source_thread_id ?? null,
+        // Where this deck came from. A review run's own thread is not it: that
+        // thread is archived when the run ends and is nobody's conversation.
+        threadRun !== null
+          ? threadRun.source_thread_id
+          : watch !== null
+            ? null
+            : ctx.threadId,
       );
       if (watch !== null) setWatch(watch.id, { deck_id: deckId });
       changed();
@@ -4293,7 +4366,7 @@ export default async function plugin(bb: BbPluginApi) {
         case "watch-deck": {
           const [deckId, url] = rest;
           if (deckId === undefined || url === undefined) break;
-          const result = await watchExistingDeck(deckId, url);
+          const result = await watchExistingDeck(deckId, url, ctx.threadId);
           return result.ok
             ? reply(result, result.message)
             : { exitCode: 1, stderr: result.message };

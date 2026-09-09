@@ -8,6 +8,18 @@ Notable changes to Review Deck. Follows [Keep a Changelog][kac]; versions are
 
 ## [Unreleased]
 
+### Fixed
+
+- **Chat went to a side thread this plugin had opened, not to where the review
+  came from.** Once a chat thread existed it was recorded as the deck's
+  conversation and won for ever, so pressing **Chat** reopened an empty side
+  thread while the conversation holding the history sat unused. A deck now
+  records the conversation it came from, separately from the thread of the
+  review run that wrote it, and that conversation is preferred. A thread you
+  attach by hand ranks above it, so a deck whose only chat was opened by the
+  plugin can be redirected; an automatic link to a fix thread does not count,
+  because that thread is for doing the work.
+
 ### Changed
 
 - **A merged or closed merge request no longer polls.** Linking one still works

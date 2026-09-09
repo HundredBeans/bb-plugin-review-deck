@@ -73,6 +73,29 @@ assert.equal(ask.threadId, "thr_work");
 assert.equal(spawned.length, 0, "still nothing spawned");
 assert.equal(sends.length, 1, "and no extra message");
 
+// --- a chat this plugin opened must not outrank where you started -------
+// Simulate the old state: a deck whose recorded chat is a spawned side thread
+// while the conversation it came from is still alive.
+bb.storage
+  .database()
+  .prepare(`UPDATE decks SET discussion_thread_id = 'thr_sidechat' WHERE id = ?`)
+  .run(deck.deckId);
+
+const preferred = await harness.behavior.callRpc("deck_next_actions", {
+  deckId: deck.deckId,
+});
+assert.equal(
+  preferred.chatThreadId,
+  "thr_work",
+  "the conversation you started from wins over a spawned side chat",
+);
+
+const back = await harness.behavior.callRpc("deck_act", {
+  deckId: deck.deckId, intent: "ask",
+});
+assert.equal(back.threadId, "thr_work", "and talking goes there");
+assert.equal(spawned.length, 0, "still nothing spawned");
+
 // --- a deck with no conversation left does spawn, and says so -----------
 const orphan = JSON.parse(String(await harness.behavior.callAgentTool(
   "review_deck_create", { title: "Orphan deck", summary: "" },
